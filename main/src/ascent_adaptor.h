@@ -28,7 +28,7 @@ void Initialize([[maybe_unused]] DataType& d, [[maybe_unused]] long startIndex)
   ascent_options["default_dir"] = output_path;
   ascent_options["mpi_comm"] = MPI_Comm_c2f(MPI_COMM_WORLD);
 #ifdef CAMP_HAVE_CUDA
-  ascent_options["runtine/vtkm/backend"] = "cuda";
+  ascent_options["runtime/vtkm/backend"] = "cuda";
 #endif
   a.open(ascent_options);
 
