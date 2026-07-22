@@ -35,6 +35,7 @@
 #include "cstone/sfc/box.hpp"
 
 #include "isim_init.hpp"
+#include "cstone/sfc/sfc.hpp"
 
 namespace sphexa
 {
@@ -143,16 +144,21 @@ public:
     cstone::Box<typename Dataset::RealType> initImpl(int /* rank */, int, size_t, Dataset& simData,
                                                      IFileReader* reader) const override
     {
-        constexpr bool gpu = cstone::HaveGpu<typename Dataset::AcceleratorType>{};
-        reader->setStep(h5_fname, -1, FileMode::collective);
+        using KeyType = typename Dataset::KeyType;
+        using T       = typename Dataset::RealType;
 
         size_t numParticlesInFile = reader->localNumParticles();
         size_t numParticlesSplit  = numParticlesInFile * numSplits;
 
-        using KeyType = typename Dataset::KeyType;
-        using T       = typename Dataset::RealType;
         cstone::Box<T> box(0, 1);
         box.loadOrStore(reader);
+
+        const auto axesBits = box.getBoxDimBits(cstone::maxTreeLevel<KeyType>{});
+        if (axesBits != cstone::Vec3<unsigned>{cstone::maxTreeLevel<KeyType>{}, cstone::maxTreeLevel<KeyType>{},
+                                               cstone::maxTreeLevel<KeyType>{}})
+        {
+            throw std::runtime_error("Particle splitting not implemented for discontinuous SFCs\n");
+        }
 
         auto& d = simData.hydro;
         d.loadOrStoreAttributes(reader);
@@ -208,7 +214,7 @@ public:
 
                 for (int j = 1; j < numSplits; ++j)
                 {
-                    auto [ixj, iyj, izj] = cstone::decodeSfc(cstone::sfcKey(keys[i] + j * keyDelta));
+                    auto [ixj, iyj, izj] = cstone::decodeSfc(cstone::sfcKey(keys[i] + j * keyDelta), axesBits);
 
                     x[sIdx + j] = box.xmin() + (ixj * box.lx()) / cstone::maxCoord<KeyType>{};
                     y[sIdx + j] = box.ymin() + (iyj * box.ly()) / cstone::maxCoord<KeyType>{};
@@ -248,13 +254,13 @@ public:
         replicateField(reader, "vz", d.vz, T(1));
         if (d.isAllocated("temp")) { replicateField(reader, "temp", d.temp, T(1)); }
         else if (d.isAllocated("u")) { replicateField(reader, "u", d.u, T(1)); }
-        cstone::fill<gpu>(d.du_m1.begin(), d.du_m1.end(), 0);
-        cstone::fill<gpu>(d.rung.begin(), d.rung.end(), 0);
-        cstone::scaleGpuAcc<gpu>(d.vx.data(), d.vx.data() + d.vx.size(), d.x_m1.data(), d.minDt);
-        cstone::scaleGpuAcc<gpu>(d.vy.data(), d.vy.data() + d.vy.size(), d.y_m1.data(), d.minDt);
-        cstone::scaleGpuAcc<gpu>(d.vz.data(), d.vz.data() + d.vz.size(), d.z_m1.data(), d.minDt);
+        cstone::fill(d.exec, d.du_m1.begin(), d.du_m1.end(), 0);
+        cstone::fill(d.exec, d.rung.begin(), d.rung.end(), 0);
+        cstone::scale(d.exec, d.vx.data(), d.vx.data() + d.vx.size(), d.x_m1.data(), d.minDt);
+        cstone::scale(d.exec, d.vy.data(), d.vy.data() + d.vy.size(), d.y_m1.data(), d.minDt);
+        cstone::scale(d.exec, d.vz.data(), d.vz.data() + d.vz.size(), d.z_m1.data(), d.minDt);
 
-        generateParticleIDs<gpu>(d.id);
+        generateParticleIDs(d.exec, d.id);
 
         if (d.isAllocated("alpha"))
         {
@@ -264,7 +270,7 @@ public:
             }
             catch (std::runtime_error&)
             {
-                cstone::fill<gpu>(d.alpha.begin(), d.alpha.end(), d.alphamin);
+                cstone::fill(d.exec, d.alpha.begin(), d.alpha.end(), d.alphamin);
             }
         }
 

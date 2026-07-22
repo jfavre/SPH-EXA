@@ -31,7 +31,6 @@
 #include <thrust/transform.h>
 
 #include "cstone/cuda/cuda_utils.cuh"
-#include "cstone/traversal/find_neighbors.cuh"
 
 #include "sph/neighborhood_gpu.hpp"
 #include "sph/sph_gpu.hpp"
@@ -43,11 +42,9 @@ namespace sph
 
 using cstone::GpuConfig;
 using cstone::LocalIndex;
-using cstone::NcStats;
-using cstone::TravConfig;
 using cstone::TreeNodeIndex;
 
-unsigned nsGroupSize() { return TravConfig::targetSize; }
+unsigned nsGroupSize() { return GpuConfig::warpSize; }
 
 namespace gpu
 {
@@ -59,7 +56,7 @@ void computeXMass(const GroupView&, Dataset& d, const cstone::Box<typename Datas
     checkGpuErrors(cudaDeviceSynchronize());
 }
 
-template void computeXMass(const GroupView& grp, sphexa::ParticlesData<cstone::GpuTag>& d,
+template void computeXMass(const GroupView& grp, sphexa::ParticlesData<cstone::execution::Gpu>& d,
                            const cstone::Box<SphTypes::CoordinateType>&);
 
 template<class Dataset>
@@ -69,7 +66,7 @@ void computeDensity(const GroupView&, Dataset& d, const cstone::Box<typename Dat
     checkGpuErrors(cudaDeviceSynchronize());
 }
 
-template void computeDensity(const GroupView&, sphexa::ParticlesData<cstone::GpuTag>& d,
+template void computeDensity(const GroupView&, sphexa::ParticlesData<cstone::execution::Gpu>& d,
                              const cstone::Box<SphTypes::CoordinateType>&);
 
 } // namespace gpu

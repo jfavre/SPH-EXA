@@ -129,10 +129,7 @@ public:
         out << ")" << std::endl;
         out << "### Check ### Focus Tree Nodes: " << domain.focusTree().octreeViewAcc().numLeafNodes << ", maxDepth "
             << domain.focusTree().depth();
-        if constexpr (cstone::HaveGpu<typename ParticleDataType::AcceleratorType>{})
-        {
-            out << ", maxStackNc " << d.stackUsedNc << ", maxStackGravity " << d.stackUsedGravity;
-        }
+        if constexpr (d.useGpu) { out << ", maxStackGravity " << d.stackUsedGravity; }
         out << "\n=== Total time for iteration(" << d.iteration << ") " << timer.sumOfSteps() << "s\n\n";
     }
 
@@ -155,7 +152,7 @@ protected:
                     std::visit(
                         [writer, c = column, key = namesDone[i]](auto field)
                         {
-                            auto&& tmp = toHost(*field);
+                            auto&& tmp = cstone::toHost(*field);
                             writeField(writer, key, tmp.data(), c);
                         },
                         fieldPointers[fidx]);
@@ -169,7 +166,7 @@ protected:
                 std::cout << "WARNING: the following fields are not in use and therefore not output: ";
                 for (std::size_t fidx = 0; fidx < indicesDone.size() - 1; ++fidx)
                 {
-                    std::cout << d.fieldNames[fidx] << ",";
+                    std::cout << d.fieldNames[indicesDone[fidx]] << ",";
                 }
                 std::cout << d.fieldNames[indicesDone.back()] << std::endl;
             }
@@ -190,8 +187,8 @@ protected:
         timer.logStatistics("hostMemSizeBytes", hostMem[1]);
         timer.logStatistics("hostCapSizeBytes", hostMem[2]);
 
-        using AccType = ParticleDataType::AcceleratorType;
-        if constexpr (cstone::HaveGpu<AccType>{})
+        using Exec = ParticleDataType::Exec;
+        if constexpr (cstone::execution::HaveGpu<Exec>{})
         {
             auto devMem = simData.hydro.memStats();
             timer.logStatistics("devMemSizeBytes", devMem[1]);

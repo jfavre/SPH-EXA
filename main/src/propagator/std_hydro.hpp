@@ -58,8 +58,8 @@ protected:
     using Tmass         = typename DataType::HydroData::Tmass;
     using MultipoleType = ryoanji::CartesianQuadrupole<Tmass>;
 
-    using Acc       = typename DataType::AcceleratorType;
-    using MHolder_t = std::conditional_t<cstone::HaveGpu<Acc>{},
+    using Acc       = typename DataType::Exec;
+    using MHolder_t = std::conditional_t<cstone::execution::HaveGpu<Acc>{},
                                          MultipoleHolderGpu<MultipoleType, DomainType, typename DataType::HydroData>,
                                          MultipoleHolderCpu<MultipoleType, DomainType, typename DataType::HydroData>>;
 
@@ -132,7 +132,9 @@ public:
 
         domain.exchangeHalos(std::tie(get<"m">(d)), get<"ax">(d), get<"ay">(d));
         computeGroups(first, last, d, domain.box(), groups_);
+        timer.step("computeGroups");
         updateSmoothingLengthIterative(groups_.view(), d, domain.box());
+        timer.step("updateSmoothingLengthIterative");
         findNeighborsSfc(groups_.view(), d, domain.box(), true);
         timer.step("FindNeighbors");
 

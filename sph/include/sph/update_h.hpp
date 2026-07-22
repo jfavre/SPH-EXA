@@ -37,10 +37,10 @@ bool updateSmoothingLengthCpu(size_t startIndex, size_t endIndex, unsigned ng0, 
 template<class Dataset>
 bool updateSmoothingLength(const GroupView& grp, Dataset& d)
 {
-    if constexpr (cstone::HaveGpu<typename Dataset::AcceleratorType>{})
+    using namespace cstone;
+    if constexpr (d.useGpu)
     {
         bool keysRemoved = updateSmoothingLengthGpu(grp, d.ng0, rawPtr(d.nc), rawPtr(d.h), rawPtr(d.keys));
-        syncGpu();
         return keysRemoved;
     }
     else
@@ -54,43 +54,17 @@ void updateSmoothingLengthIterativeCpu(const Tc* x, const Tc* y, const Tc* z, T*
                                        LocalIndex lastId, const cstone::Box<Tc>& box,
                                        const cstone::OctreeNsView<Tc, KeyType>& treeView, unsigned ng0, unsigned ngmax)
 {
-    LocalIndex numWork = lastId - firstId;
-
-    unsigned ngmin = ng0 / 4;
-
-    constexpr int maxIteration = 10;
-
-#pragma omp parallel
+#pragma omp parallel for
+    for (LocalIndex i = firstId; i < lastId; ++i)
     {
-        std::vector<LocalIndex> neighbors(ngmax);
-
-#pragma omp for
-        for (LocalIndex i = 0; i < numWork; ++i)
-        {
-            LocalIndex id    = i + firstId;
-            unsigned   ncSph = 1 + findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors.data());
-
-            int iteration = 0;
-            while ((ngmin > ncSph || (ncSph - 1) > ngmax) && iteration++ < maxIteration)
-            {
-                h[id] = updateH(ng0, ncSph, h[id]);
-                ncSph = 1 + findNeighbors(id, x, y, z, h, treeView, box, ngmax, neighbors.data());
-            }
-
-            nc[id] = ncSph;
-
-            if (iteration == maxIteration && (ngmin > ncSph || (ncSph - 1) > ngmax)) { nc[id] = 1; }
-        }
+        updateHIterative(ng0, ngmax, box, treeView, i, x, y, z, h, nc);
     }
 }
 
 template<class T, class Dataset>
 void updateSmoothingLengthIterative(const cstone::GroupView& groups, Dataset& d, const cstone::Box<T>& box)
 {
-    if constexpr (cstone::HaveGpu<typename Dataset::AcceleratorType>{})
-    {
-        updateSmoothingLengthIterativeGpu(groups, d, box);
-    }
+    if constexpr (d.useGpu) { updateSmoothingLengthIterativeGpu(groups, d, box); }
     else
     {
         updateSmoothingLengthIterativeCpu(d.x.data(), d.y.data(), d.z.data(), d.h.data(), d.nc.data(), groups.firstBody,

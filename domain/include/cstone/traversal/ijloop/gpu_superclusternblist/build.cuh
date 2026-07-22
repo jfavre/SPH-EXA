@@ -27,8 +27,8 @@
 #include <type_traits>
 
 #include "cstone/cuda/memory.cuh"
+#include "cstone/execution.hpp"
 #include "cstone/reducearray.cuh"
-#include "cstone/traversal/find_neighbors.cuh"
 #include "cstone/traversal/groups.hpp"
 #include "cstone/traversal/ijloop/compressneighbors.cuh"
 #include "cstone/traversal/ijloop/gpu_superclusternblist/common.cuh"
@@ -146,7 +146,8 @@ __global__ void computeJClusterBboxesKernel(const LocalIndex firstValidBody,
 }
 
 template<class Config, class Tc, class ThP>
-util::UniqueDevicePtr<JClusterBbox<Config, Tc>[]> computeJClusterBboxes(const LocalIndex firstValidBody,
+util::UniqueDevicePtr<JClusterBbox<Config, Tc>[]> computeJClusterBboxes(const execution::Gpu exec,
+                                                                        const LocalIndex firstValidBody,
                                                                         const LocalIndex totalBodies,
                                                                         const Tc* const __restrict__ x,
                                                                         const Tc* const __restrict__ y,
@@ -154,11 +155,11 @@ util::UniqueDevicePtr<JClusterBbox<Config, Tc>[]> computeJClusterBboxes(const Lo
                                                                         const ThP h)
 {
     const LocalIndex numJClusters = jClusterIndex<Config>(totalBodies - 1) + 1;
-    auto jClusterBboxes           = util::deviceAlloc<JClusterBbox<Config, Tc>[]>(numJClusters);
+    auto jClusterBboxes           = util::deviceAlloc<JClusterBbox<Config, Tc>[]>(exec, numJClusters);
     constexpr unsigned numThreads = 256;
     unsigned numBlocks            = iceil(numJClusters * Config::jSize, numThreads);
     computeJClusterBboxesKernel<Config>
-        <<<numBlocks, numThreads>>>(firstValidBody, totalBodies, x, y, z, h, jClusterBboxes.get());
+        <<<numBlocks, numThreads, 0, exec>>>(firstValidBody, totalBodies, x, y, z, h, jClusterBboxes.get());
     checkGpuErrors(cudaGetLastError());
     return jClusterBboxes;
 }
@@ -279,6 +280,23 @@ superclusterBoundingBox(const std::array<Vec3<Tc>, WarpsPerSupercluster>& iPos,
     const Vec3<Tc> bBoxSize   = (bBoxMax - bBoxMin) * Tc(0.5);
 
     return {bBoxCenter, bBoxSize, maxParticleRadius};
+}
+
+template<bool UsePbc, class T>
+__device__ __forceinline__ bool cellOverlap(const Vec3<T>& curSrcCenter,
+                                            const Vec3<T>& curSrcSize,
+                                            const Vec3<T>& targetCenter,
+                                            const Vec3<T>& targetSize,
+                                            const Box<T>& box)
+{
+    if constexpr (UsePbc)
+    {
+        return norm2(minDistance(curSrcCenter, curSrcSize, targetCenter, targetSize, box)) == T(0.0);
+    }
+    else
+    {
+        return norm2(minDistance(curSrcCenter, curSrcSize, targetCenter, targetSize)) == T(0.0);
+    }
 }
 
 /*! traverse the octree to find neighbor clusters for a supercluster
@@ -557,7 +575,8 @@ __global__ __launch_bounds__(GpuConfig::warpSize* NumSuperclustersPerBlock) void
 }
 
 template<class Config, class Tc, class ThP, class KeyType>
-std::size_t buildNbList(const OctreeNsView<Tc, KeyType>& tree,
+std::size_t buildNbList(const execution::Gpu exec,
+                        const OctreeNsView<Tc, KeyType>& tree,
                         const Box<Tc>& box,
                         const LocalIndex totalBodies,
                         const GroupView& groups,
@@ -574,23 +593,24 @@ std::size_t buildNbList(const OctreeNsView<Tc, KeyType>& tree,
                         const std::size_t neighborDataVirtualSize,
                         SuperclusterInfo* const superclusterInfo)
 {
-    auto globalBuildData = util::deviceAlloc<GlobalBuildData>();
+    auto globalBuildData = util::deviceAlloc<GlobalBuildData>(exec);
 
     constexpr unsigned numSuperclustersPerBlock = 2;
     const dim3 blockSize                        = {GpuConfig::warpSize, 1, numSuperclustersPerBlock};
-    const unsigned numBlocks = std::min(GpuConfig::smCount * (TravConfig::numWarpsPerSm / numSuperclustersPerBlock),
+    constexpr unsigned numWarpsPerSm            = 40;
+    const unsigned numBlocks = std::min(GpuConfig::smCount * (numWarpsPerSm / numSuperclustersPerBlock),
                                         (numISuperclusters + numSuperclustersPerBlock - 1) / numSuperclustersPerBlock);
     const unsigned sharedMem = numSuperclustersPerBlock * buildNbListSharedMemPerSupercluster<Config, Tc, ThP>(ncmax);
 
-    checkGpuErrors(cudaMemsetAsync(globalBuildData.get(), 0, sizeof(GlobalBuildData)));
+    checkGpuErrors(cudaMemsetAsync(globalBuildData.get(), 0, sizeof(GlobalBuildData), exec));
 
     auto run = [&](auto usePbc)
     {
         buildNbListKernel<Config, numSuperclustersPerBlock, decltype(usePbc)::value>
-            <<<numBlocks, blockSize, sharedMem>>>(tree, box, firstValidBody, totalBodies, groups.firstBody,
-                                                  groups.lastBody, x, y, z, h, jClusterBboxes, nodeRMax, ncmax,
-                                                  neighborData, neighborDataVirtualSize, superclusterInfo,
-                                                  numISuperclusters, globalBuildData.get());
+            <<<numBlocks, blockSize, sharedMem, exec>>>(tree, box, firstValidBody, totalBodies, groups.firstBody,
+                                                        groups.lastBody, x, y, z, h, jClusterBboxes, nodeRMax, ncmax,
+                                                        neighborData, neighborDataVirtualSize, superclusterInfo,
+                                                        numISuperclusters, globalBuildData.get());
         checkGpuErrors(cudaGetLastError());
     };
 
@@ -601,7 +621,9 @@ std::size_t buildNbList(const OctreeNsView<Tc, KeyType>& tree,
         run(std::false_type());
 
     GlobalBuildData buildData;
-    checkGpuErrors(cudaMemcpy(&buildData, globalBuildData.get(), sizeof(GlobalBuildData), cudaMemcpyDeviceToHost));
+    checkGpuErrors(
+        cudaMemcpyAsync(&buildData, globalBuildData.get(), sizeof(GlobalBuildData), cudaMemcpyDeviceToHost, exec));
+    checkGpuErrors(cudaStreamSynchronize(exec));
     switch (buildData.status)
     {
         case BuildStatus::success: break;

@@ -30,7 +30,6 @@
  */
 
 #include "cstone/cuda/cuda_utils.cuh"
-#include "cstone/traversal/find_neighbors.cuh"
 
 #include "sph/neighborhood_gpu.hpp"
 #include "sph/sph_gpu.hpp"
@@ -57,7 +56,7 @@ void computeAVswitches(const GroupView&, Dataset& d, const cstone::Box<typename 
     checkGpuErrors(cudaDeviceSynchronize());
 }
 
-template void computeAVswitches(const GroupView& grp, sphexa::ParticlesData<cstone::GpuTag>& d,
+template void computeAVswitches(const GroupView& grp, sphexa::ParticlesData<cstone::execution::Gpu>& d,
                                 const cstone::Box<SphTypes::CoordinateType>&);
 
 } // namespace sph::gpu
